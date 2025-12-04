@@ -205,3 +205,43 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# --------------------------------------------------------------------
+# AGREGADOS PARA EL PROYECTO GALAXY CLASSIFIER
+# --------------------------------------------------------------------
+
+# 1. Sistema Operativo (Basura que generan Macs y Windows)
+.DS_Store
+Thumbs.db
+
+# 2. IDEs (Para que la config de VSCode de uno no moleste al que usa PyCharm)
+.vscode/
+.idea/
+
+# 3. Datos Pesados (REGLA DEL PDF: No subir datasets)
+# La carpeta donde la Persona A tenga las imágenes para entrenar
+data/
+dataset/
+images/train/
+images/test/
+*.zip
+*.tar.gz
+
+# 4. Modelos Intermedios o Gigantes
+# Si el modelo pesa >100MB, GitHub no dejará subirlo.
+# Descomenta la siguiente línea si el modelo final es muy pesado:
+# *.h5
+# *.pkl
+# Checkpoints de entrenamiento que no sirven
+*.ckpt
+*.weights
+
+# 5. Streamlit (Secretos del Frontend)
+# ¡Muy importante! Aquí se guardan contraseñas en local
+.streamlit/secrets.toml
+
+# 6. Base de Datos Local (Persona C)
+# Para no subir tu base de datos de pruebas con datos falsos
+*.db
+*.sqlite
+*.sqlite3
