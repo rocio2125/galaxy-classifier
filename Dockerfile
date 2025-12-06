@@ -1,19 +1,16 @@
 # /Dockerfile
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Instalar curl para bajar el modelo
-RUN apt-get update && apt-get install -y curl
+# Instalar las dependencias basicas
+RUN apt-get update && apt-get install -y \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-# DESCARGA DEL MODELO (Hugging Face)
-# Sustituye el enlace por el tuyo real de Hugging Face
-RUN curl -L "ENLACE_DIRECTO_HUGGING_FACE" -o src/models/galaxy_cnn.pkl
 
 # Exponer puerto interno
 EXPOSE 10000

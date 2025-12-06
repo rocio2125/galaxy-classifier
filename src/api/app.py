@@ -5,16 +5,24 @@ import datetime
 import io
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
+from flask_cors import CORS  # <--- Para que el Frontend no falle
 from PIL import Image
 from huggingface_hub import hf_hub_download
 from dotenv import load_dotenv
+from src.database.db import db          # <--- IMPORTAMOS EL CONECTOR
+from src.database.models import Prediction # <--- IMPORTAMOS EL MODELO
 
 # Cargar variables de entorno (.env) automáticamente si estamos en local sin Docker
 load_dotenv()
 
 app = Flask(__name__)
 
-# --- 1. CONFIGURACIÓN ROBUSTA DE BBDD (POSTGRES ONLY) ---
+# --- 1. CONFIGURACIÓN CORS (CRUCIAL PARA EQUIPOS) ---
+# Permite que cualquier origen (*) acceda a tu API. 
+# En prod real podrías restringirlo al dominio de tu frontend.
+CORS(app)
+
+# --- 2. CONFIGURACIÓN ROBUSTA DE BBDD (POSTGRES ONLY) ---
 # Intentamos leer la URL. Si no existe, fallamos (Fail Fast).
 # Esto evita que creas que estás guardando datos y en realidad no esté conectado.
 database_url = os.getenv('DATABASE_URL')
@@ -31,19 +39,11 @@ app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'clave_segura_por_defecto')
 
-db = SQLAlchemy(app)
-
-# --- 2. MODELO DE DATOS (ORM) ---
-class Prediction(db.Model):
-    __tablename__ = 'predictions'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    timestamp = db.Column(db.String(100))
-    filename = db.Column(db.String(200))
-    prediction = db.Column(db.String(500))  # Guardamos el resultado como texto
+# INICIALIZACIÓN DE LA BASE DE DATOS
+# Vinculamos la base de datos a esta app específica
+db.init_app(app)
 
 # --- 3. CARGA DEL MODELO (HUGGING FACE) ---
-# Asegúrate de que este REPO_ID sea el correcto de tu compañera
 REPO_ID = "rocio2125/paisajes"
 FILENAME = "paisajes.pkl"
 
@@ -64,9 +64,10 @@ def load_model_from_hf():
         print(f"❌ ERROR FATAL cargando el modelo: {e}")
         return None
 
+# Cargamos el modelo al iniciar la app (Variables globales)
 model = load_model_from_hf()
 
-# --- 4. INICIALIZACIÓN AUTOMÁTICA ---
+# --- 4. CREACIÓN DE TABLAS (SEGURO PARA PROD) ---
 # Al arrancar, verificamos que la conexión a Postgres funciona y creamos tablas
 with app.app_context():
     try:
@@ -88,11 +89,18 @@ def preprocess_image(image_bytes):
 
 # --- 6. ENDPOINTS ---
 
+# Endpoint de bienvenida
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "API de Predicción de Paisajes Activa v1.0"}), 200
+
+# Endpoint de estado de la API
 @app.route("/health", methods=["GET"])
 def health_check():
     """Endpoint para que Render sepa que estamos vivos"""
     return jsonify({"status": "ok", "db": "connected"}), 200
 
+# Endpoint de predicción
 @app.route("/predict", methods=["POST"])
 def predict():
     if model is None:
@@ -133,6 +141,7 @@ def predict():
         db.session.rollback() # Deshacer cambios si falla
         return jsonify({"error": str(e)}), 500
 
+# Endpoint de consultar predicciones
 @app.route("/predictions", methods=["GET"])
 def get_predictions():
     try:
@@ -148,6 +157,7 @@ def get_predictions():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# Endpoint de consultar predicción por ID
 @app.route("/predictions/<int:prediction_id>", methods=["GET"])
 def get_prediction_by_id(prediction_id):
     p = Prediction.query.get(prediction_id)
@@ -161,6 +171,7 @@ def get_prediction_by_id(prediction_id):
         "prediction": p.prediction
     })
 
+# Endpoint de borrar predicciones
 @app.route("/predictions/delete", methods=["DELETE"])
 def delete_all_predictions():
     try:
