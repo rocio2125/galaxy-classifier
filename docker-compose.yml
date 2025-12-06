@@ -24,15 +24,16 @@ services:
     volumes:
       # (Opcional) Para desarrollo: ver cambios en el código sin reconstruir
       - .:/app
-      # CAMBIO 2: Persistencia del modelo de Hugging Face
-      # Mapeamos tu carpeta local 'models' a la carpeta de caché interna
-      - ./models:/app/hf_cache
+      # --- CORRECCIÓN AQUÍ ---
+      # Local: Apuntamos a src/models
+      # Contenedor: Apuntamos a /app/model_cache
+      - ./src/models:/app/model_cache
     environment:
       DATABASE_URL: postgresql://user:password@db:5432/galaxy_db
       SECRET_KEY: local_secret
-      # CAMBIO 3: Configuramos Hugging Face para usar la carpeta del volumen
-      HF_HOME: /app/hf_cache
-      # CAMBIO 4: Si tu modelo es PRIVADO, descomenta la linea de abajo y pon tu token
+      # Configuramos Hugging Face para usar la carpeta del volumen
+      HF_HOME: /app/model_cache
+      # Descomentar si el modelo es PRIVADO
       # HF_TOKEN: "hf_tu_token_aqui"
     depends_on:
       - db

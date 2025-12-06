@@ -236,12 +236,13 @@ images/test/
 *.ckpt
 *.weights
 
-# 5. Streamlit (Secretos del Frontend)
+# 5. Streamlit
 # ¡Muy importante! Aquí se guardan contraseñas en local
 .streamlit/secrets.toml
 
-# 6. Base de Datos Local (Persona C)
+# 6. Base de Datos Local
 # Para no subir tu base de datos de pruebas con datos falsos
 *.db
 *.sqlite
 *.sqlite3
+postgres_data/

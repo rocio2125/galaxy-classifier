@@ -8,3 +8,5 @@ huggingface_hub
 python-dotenv
 scikit-learn
 tensorflow
+streamlit
+requests
