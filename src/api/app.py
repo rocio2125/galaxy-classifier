@@ -1,176 +1,155 @@
 from flask import Flask, request, jsonify
-import pickle
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import Column, Integer, String, DateTime
+from datetime import datetime
 import numpy as np
+from keras.models import load_model
 from PIL import Image
 import io
-import sqlite3
-import datetime
 import os
-from huggingface_hub import hf_hub_download
 
+
+# CONFIG FLASK
 
 app = Flask(__name__)
 
-REPO_ID = "rocio2125/paisajes"
-FILENAME = "paisajes.pkl"
+app.config["SQLALCHEMY_DATABASE_URI"] = (
+    "postgresql://rizzijp:6bxbCP9beZdlqj2gQRMsly0NNOhAmPcw@"
+    "dpg-d4q53cc9c44c73b6o2jg-a.frankfurt-postgres.render.com/"
+    "predictionsdb_4sex?sslmode=require"
+)
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+
+db = SQLAlchemy(app)
 
 
-# DESCARGA DESDE HUGGINGFACE y CARGA DEL MODELO
+# MODELO SQLALCHEMY
 
-def load_model_from_hf():
-    print("Descargando/cargando modelo desde HuggingFace…")
-    model_path = hf_hub_download(
-        repo_id=REPO_ID,
-        filename=FILENAME,
-        cache_dir="./model_cache"   # opcional, donde guardar el modelo
-    )
+class Prediction(db.Model):
+    __tablename__ = "predictions"
 
-    with open(model_path, "rb") as f:
-        model = pickle.load(f)
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=datetime.utcnow)
+    filename = Column(String, nullable=False)
+    prediction = Column(String, nullable=False)
 
-    print("Modelo cargado correctamente.")
-    return model
-
-model = load_model_from_hf()
-
-#   CONFIGURAR BASE DE DATOS
-
-DB_PATH = "../database/predictions.db"
-
-def init_db():
-    """
-    Crea la base de datos y la tabla si no existen.
-    """
-    # Crear archivo si no existe
-    if not os.path.exists(DB_PATH):
-        open(DB_PATH, "w").close()
-
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS predictions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            filename TEXT,
-            prediction TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+with app.app_context():
+    db.create_all()
 
 
-def save_prediction(filename, prediction):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO predictions (timestamp, filename, prediction) VALUES (?, ?, ?)",
-        (datetime.datetime.now().isoformat(), filename, str(prediction))
-    )
-    conn.commit()
-    conn.close()
+# CARGA DEL MODELO
+
+MODEL_PATH = "../models/modelo_galaxias.keras"
+model = load_model(MODEL_PATH)
+
+LABELS = {
+    0: "spiral",
+    1: "elliptical",
+    2: "lenticular",
+    3: "irregular",
+    4: "merger",
+    5: "unknown",
+    6: "barred spiral",
+    7: "compact",
+    8: "edge-on",
+    9: "uncertain"
+}
 
 
-# Llamar a init_db() al arrancar
-init_db()
-
-
-
-#   PREPROCESADO DE IMAGEN
+# PREPROCESADO
 
 def preprocess_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    img = img.resize((100, 100))  # Tamaño esperado por el modelo
-    img_arr = np.array(img) / 255.0
-    img_arr = np.expand_dims(img_arr, axis=0)
-    return img_arr
+    img = img.resize((224, 224))
+    arr = np.array(img) / 255.0
+    return np.expand_dims(arr, axis=0)
 
 
 
-#   ENDPOINT 1: PREDICCIÓN
+# ENDPOINT: PREDICT
 
 @app.route("/predict", methods=["POST"])
 def predict():
-
     if "image" not in request.files:
-        return jsonify({"error": "Debes enviar una imagen"}), 400
+        return jsonify({"error": "Debes subir una imagen"}), 400
 
     image_file = request.files["image"]
-    image_bytes = image_file.read()
-    processed_img = preprocess_image(image_bytes)
+    filename = image_file.filename
+    img_bytes = image_file.read()
 
-    prediction = model.predict(processed_img)
-    pred_value = prediction.tolist()
+    img = preprocess_image(img_bytes)
+    pred = model.predict(img)
+    class_index = int(np.argmax(pred))
+    class_name = LABELS[class_index]
 
     # Guardar en BD
-    save_prediction(image_file.filename, pred_value)
+    new_prediction = Prediction(
+        filename=filename,
+        prediction=class_name
+    )
+    db.session.add(new_prediction)
+    db.session.commit()
 
     return jsonify({
-        "filename": image_file.filename,
-        "prediction": pred_value
+        "id": new_prediction.id,
+        "timestamp": new_prediction.timestamp.isoformat(),
+        "filename": filename,
+        "prediction_name": class_name
     })
 
 
-
-#   ENDPOINT 2: CONSULTAR PREDICCIONES
+# ENDPOINT: TODAS LAS PREDICCIONES
 
 @app.route("/predictions", methods=["GET"])
 def get_predictions():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, timestamp, filename, prediction FROM predictions")
-    rows = c.fetchall()
-    conn.close()
-
-    results = []
-    for r in rows:
-        results.append({
-            "id": r[0],
-            "timestamp": r[1],
-            "filename": r[2],
-            "prediction": r[3]
-        })
-
-    return jsonify(results)
+    preds = Prediction.query.order_by(Prediction.id).all()
+    return jsonify([
+        {
+            "id": p.id,
+            "timestamp": p.timestamp.isoformat(),
+            "filename": p.filename,
+            "prediction": p.prediction
+        }
+        for p in preds
+    ])
 
 
-#   ENDPOINT 3: CONSULTAR UNA PREDICCIÓN POR ID
+# ENDPOINT: PREDICCIÓN POR ID
 
-@app.route("/predictions/<int:prediction_id>", methods=["GET"])
-def get_prediction_by_id(prediction_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, timestamp, filename, prediction FROM predictions WHERE id = ?", (prediction_id,))
-    row = c.fetchone()
-    conn.close()
+@app.route("/predictions/<int:pred_id>", methods=["GET"])
+def get_prediction_by_id(pred_id):
+    p = Prediction.query.get(pred_id)
+    if not p:
+        return jsonify({"error": "ID no encontrado"}), 404
 
-    if row is None:
-        return jsonify({"error": "Predicción no encontrada"}), 404
-
-    result = {
-        "id": row[0],
-        "timestamp": row[1],
-        "filename": row[2],
-        "prediction": row[3]
-    }
-
-    return jsonify(result)
+    return jsonify({
+        "id": p.id,
+        "timestamp": p.timestamp.isoformat(),
+        "filename": p.filename,
+        "prediction": p.prediction
+    })
 
 
-#   ENDPOINT 4: BORRAR TODAS LAS PREDICCIONES
+# ENDPOINT: BORRAR TABLA
 
 @app.route("/predictions/delete", methods=["DELETE"])
-def delete_all_predictions():
+def delete_all():
+    db.session.query(Prediction).delete()
+    db.session.commit()
+    return jsonify({"message": "Todas las predicciones eliminadas"}), 200
+
+# ENDPOINT: RESETEAR BASE DE DATOS
+
+@app.route("/reset_db", methods=["POST"])
+def reset_db():
     try:
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM predictions")
-        conn.commit()
-        conn.close()
-
-        return jsonify({"message": "All predictions deleted"}), 200
-
+        db.drop_all()
+        db.create_all()
+        return jsonify({"status": "ok", "message": "Database reset done"}), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# MAIN
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0")

@@ -1,44 +1,85 @@
 import streamlit as st
 import requests
 
-API_URL = "http://localhost:5000"
+API_URL = "http://127.0.0.1:5000"
 
-st.title("Cliente Streamlit para modelo de imágenes")
+st.title("Clasificador de Galaxias 🌌")
 
+# =============================
+# PREDICCIÓN
+# =============================
+image = st.file_uploader("Selecciona imagen", type=["jpg", "jpeg", "png"])
 
-# SUBIR IMAGEN Y PREDECIR
-
-uploaded_file = st.file_uploader("Sube una imagen", type=["jpg", "png"])
-
-if st.button("Predecir"):
-    if uploaded_file:
-        files = {"image": uploaded_file.getvalue()}
+if st.button("Realizar predicción"):
+    if image is None:
+        st.error("Debes seleccionar una imagen.")
+    else:
+        files = {"image": (image.name, image.getvalue(), image.type)}
         resp = requests.post(f"{API_URL}/predict", files=files)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            st.success("Predicción generada:")
+            st.write(f"**ID:** {data['id']}")
+            st.write(f"**Fecha:** {data['timestamp']}")
+            st.write(f"**Archivo:** {data['filename']}")
+            st.write(f"**Predicción:** `{data['prediction_name']}`")
+        else:
+            st.error("Error en la predicción")
+
+# =============================
+# VER TODAS
+# =============================
+st.subheader("📄 Ver todas las predicciones")
+
+if st.button("Cargar predicciones"):
+    resp = requests.get(f"{API_URL}/predictions")
+    if resp.status_code == 200:
         st.write(resp.json())
     else:
-        st.error("Primero sube una imagen.")
+        st.error("No se pudieron cargar")
 
+# =============================
+# CONSULTAR POR ID
+# =============================
+st.subheader("🔍 Buscar predicción por ID")
 
-# CONSULTAR TODAS LAS PREDICCIONES
-
-if st.button("Consultar todas las predicciones"):
-    resp = requests.get(f"{API_URL}/predictions")
-    st.write(resp.json())
-
-
-# CONSULTAR UNA PREDICCIÓN POR ID
-
-st.subheader("Consultar predicción por ID")
 pred_id = st.number_input("ID:", min_value=1, step=1)
 
-if st.button("Consultar por ID"):
-    resp = requests.get(f"{API_URL}/predictions/{pred_id}")
-    st.write(resp.json())
+if st.button("Buscar"):
+    resp = requests.get(f"{API_URL}/predictions/{int(pred_id)}")
+    if resp.status_code == 200:
+        st.write(resp.json())
+    else:
+        st.error("ID no encontrado")
 
+# =============================
+# BORRAR TODO
+# =============================
+st.subheader("🗑️ Borrar todas las predicciones")
 
-# BORRAR TODAS LAS PREDICCIONES
-
-if st.button("Borrar todas las predicciones"):
+if st.button("Eliminar todo"):
     resp = requests.delete(f"{API_URL}/predictions/delete")
-    st.success("Tabla de predicciones borrada")
-    st.write(resp.json())
+    if resp.status_code == 200:
+        st.success(resp.json()["message"])
+    else:
+        st.error("No se pudo borrar")
+        
+# ===========================
+#   BOTÓN PARA RESETEAR DB
+# ===========================
+
+st.subheader("⚠️ Administración de la Base de Datos")
+
+if st.button("🗑️ Resetear Base de Datos"):
+    try:
+        resp = requests.post(f"{API_URL}/reset_db")
+        if resp.status_code == 200:
+            st.success("✅ Base de datos reseteada correctamente.")
+            st.write(resp.json())
+        else:
+            st.error(f"❌ Error al resetear: {resp.status_code}")
+            st.write(resp.text)
+    except Exception as e:
+        st.error("❌ No se pudo conectar con la API.")
+        st.write(str(e))
