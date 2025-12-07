@@ -5,7 +5,7 @@ gunicorn
 numpy
 pillow
 python-dotenv
-tensorflow-cpu
+tensorflow-cpu==2.15.0
 streamlit
 requests
 flask-cors

@@ -1,9 +1,11 @@
-# Ignorar carpetas pesadas o innecesarias para la imagen
-src/models/
-postgres_data/
 .git/
 .env
 __pycache__/
 *.pyc
 *.pyo
 venv/
+*.keras
+*.h5
+snapshots/
+docs/
+notebooks/
