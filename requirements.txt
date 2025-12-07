@@ -4,7 +4,6 @@ psycopg2-binary
 gunicorn
 numpy
 pillow
-huggingface_hub
 python-dotenv
 tensorflow-cpu
 streamlit

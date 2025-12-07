@@ -5,12 +5,7 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from PIL import Image
 from dotenv import load_dotenv
-
-# --- IMPORTS DEL MODELO DE "GALAXIAS" (TENSORFLOW) ---
-from tensorflow.keras.models import load_model
-from huggingface_hub import hf_hub_download
-
-# --- IMPORTS ---
+import tensorflow as tf # Usamos TF solo para el intérprete Lite
 from src.database.db import db
 from src.database.models import Prediction
 import datetime
@@ -42,28 +37,32 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'super-secret-key')
 # Inicializamos la DB con la app
 db.init_app(app)
 
-# 3. CARGA DEL MODELO DE GALAXIAS (TENSORFLOW + HUGGING FACE)
-# Usamos el repo pero con caché persistente
-REPO_ID = "jprizzi/galaxy-classifier" # Poner el repo en HF
-FILENAME = "modelo_galaxias.keras" # Asegúrate que este sea el nombre exacto en HF
-CACHE_DIR = "/app/model_cache"     # Coincide con docker-compose.yml
+# 3. CARGA DEL MODELO LITE (Optimizado para memoria baja)
+# CÁLCULO DE LA RUTA DEL MODELO
+# Obtenemos la ruta de ESTE archivo (app.py): .../src/api/app.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Subimos un nivel para llegar a 'src': .../src
+SRC_DIR = os.path.dirname(BASE_DIR)
+# Entramos a 'models' y apuntamos al archivo
+MODEL_PATH = os.path.join(SRC_DIR, 'models', 'modelo_galaxias.tflite')
 
-print("⏳ Iniciando carga del modelo de Galaxias...")
+interpreter = None
+input_details = None
+output_details = None
 
+print("⏳ Cargando modelo TFLite...")
 try:
-    model_path = hf_hub_download(
-        repo_id=REPO_ID,
-        filename=FILENAME,
-        cache_dir=CACHE_DIR
-    )
-    print(f"✅ Modelo descargado/encontrado en: {model_path}")
-
-    # Cargamos el modelo de Keras
-    model = load_model(model_path)
-    print("🚀 Modelo de Galaxias cargado en memoria!")
+    # Cargamos el intérprete (ocupa 10 veces menos RAM)
+    interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
+    interpreter.allocate_tensors()
+    
+    # Obtenemos referencias de entrada y salida
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
+    
+    print("🚀 Modelo TFLite cargado correctamente!")
 except Exception as e:
-    print(f"❌ ERROR CRÍTICO cargando el modelo: {e}")
-    model = None
+    print(f"❌ Error cargando TFLite: {e}")
 
 # Etiquetas del modelo de Galaxias (Mapeo de índice a nombre)
 LABELS = {
@@ -81,67 +80,69 @@ with app.app_context():
     except Exception as e:
         print(f"❌ Error conectando a la Base de Datos: {e}")
 
-
-# 5. ENDPOINTS
-
-# ENDPOINT: BIENVENIDA
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "API de Predicción de Galaxias Activa v1.0"}), 200
-
-# ENDPOINT: ESTADO DE LA API
-@app.route("/health", methods=["GET"])
-def health_check():
-    return jsonify({"status": "ok", "model": "galaxy-classifier-v1"}), 200
-
-
 # PREPROCESADO
 def preprocess_image(image_bytes):
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         img = img.resize((224, 224))
         #arr = np.array(img) / 255.0
+        # PROCESADO TFLITE: Float32 y rango 0-255
+        arr = np.array(img, dtype=np.float32)
 
         # LOG DE DIAGNÓSTICO
         print(f"🔍 [DEBUG IMG] Shape: {arr.shape} | Min: {arr.min():.4f} | Max: {arr.max():.4f}")
-
+        # Dimensión extra para batch: (1, 224, 224, 3)
         return np.expand_dims(arr, axis=0)
     except Exception as e:
         # Si la imagen está corrupta, lanzamos error para capturarlo después
         raise ValueError(f"Error procesando imagen: {e}")
 
+# 5. ENDPOINTS
+
+# ENDPOINT: BIENVENIDA
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "API Lite Activa"}), 200
+
+# ENDPOINT: ESTADO DE LA API
+@app.route("/health", methods=["GET"])
+def health():
+    if interpreter is None:
+         return jsonify({"status": "error", "reason": "Model not loaded"}), 500
+    return jsonify({"status": "ok", "type": "TFLite"}), 200
+
 # ENDPOINT: PREDICT
 @app.route("/predict", methods=["POST"])
 def predict():
-    # 1. Seguridad: Verificar que el modelo existe
-    if model is None:
-        return jsonify({"error": "El modelo no está disponible"}), 500
+    if interpreter is None:
+        return jsonify({"error": "Modelo no disponible"}), 500
 
-    # 2. Flexibilidad: Aceptar 'image' O 'file'
     if 'image' not in request.files and 'file' not in request.files:
-        return jsonify({"error": "Debes subir una imagen (key 'image' o 'file')"}), 400
+        return jsonify({"error": "Falta imagen"}), 400
     
     file = request.files.get("image") or request.files.get("file")
+    print(f"📸 Recibido: {file.filename}")
 
-    # --- Imprimir qué llega ---
-    print(f"📸 API Recibió archivo: {file.filename}")
-    
     try:
-        # 3. Procesamiento
         img_bytes = file.read()
-        img_processed = preprocess_image(img_bytes)
+        input_data = preprocess_image(img_bytes)
+
+        # --- INFERENCIA TFLITE ---
+        # 1. Poner los datos en la entrada
+        interpreter.set_tensor(input_details[0]['index'], input_data)
+        # 2. Ejecutar
+        interpreter.invoke()
+        # 3. Leer la salida
+        pred = interpreter.get_tensor(output_details[0]['index'])
+        # -------------------------
+
+        print(f"📊 Vector: {pred}")
         
-        # 4. Inferencia
-        pred = model.predict(img_processed)
-
-        # --- Predicción Cruda ---
-        print(f"📊 [DEBUG PRED] Vector crudo: {pred}")
-
         class_index = int(np.argmax(pred))
         class_name = LABELS.get(class_index, "Unknown")
-        confidence = float(np.max(pred)) # <--- Extraemos la confianza
+        confidence = float(np.max(pred))
 
-        # 5. Guardado Seguro en BD
+        # Guardar
         new_prediction = Prediction(
             filename=file.filename,
             prediction=class_name,
@@ -150,22 +151,18 @@ def predict():
         db.session.add(new_prediction)
         db.session.commit()
 
-        # Al final de la función, cuando guardas:
-        print(f"🧠 Predicción: {class_name} | Confianza: {confidence}")
-
         return jsonify({
             "id": new_prediction.id,
-            "timestamp": new_prediction.timestamp.isoformat(), # Asumiendo que tu modelo lo genera
             "filename": file.filename,
             "prediction_name": class_name,
             "confidence": confidence
         })
 
-    except ValueError as ve:
-        return jsonify({"error": str(ve)}), 400 # Error de usuario (imagen mala)
     except Exception as e:
-        db.session.rollback() # <--- ¡IMPORTANTE! Limpiamos la transacción fallida
-        return jsonify({"error": f"Error interno: {str(e)}"}), 500
+        db.session.rollback()
+        print(f"❌ Error: {e}")
+        return jsonify({"error": str(e)}), 500
+
 
 # ENDPOINT: TODAS LAS PREDICCIONES
 
