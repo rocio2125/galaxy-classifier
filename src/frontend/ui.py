@@ -1,7 +1,9 @@
 import streamlit as st
 import requests
+import os
 
-API_URL = "http://localhost:5000"
+# Leer variable de entorno, si no existe usa localhost (para pruebas sin docker)
+API_URL = os.getenv("API_URL", "http://localhost:5000")
 
 st.title("Cliente Streamlit para modelo de imágenes")
 
@@ -12,9 +14,24 @@ uploaded_file = st.file_uploader("Sube una imagen", type=["jpg", "png"])
 
 if st.button("Predecir"):
     if uploaded_file:
-        files = {"image": uploaded_file.getvalue()}
+        # --- Imprimir qué llega ---
+        print(f"📸 API Recibió archivo: {uploaded_file.name}")
+
+        # Rebobina el archivo al principio
+        uploaded_file.seek(0)
+
+        # Leer bytes
+        bytes_data = uploaded_file.getvalue()
+
+        # Enviar
+        files = {"image": (uploaded_file.name, bytes_data, uploaded_file.type)}
         resp = requests.post(f"{API_URL}/predict", files=files)
-        st.write(resp.json())
+
+        if resp.status_code == 200:
+            st.success("Predicción exitosa")
+            st.write(resp.json())
+        else:
+            st.error(f"Error en API: {resp.text}")
     else:
         st.error("Primero sube una imagen.")
 
