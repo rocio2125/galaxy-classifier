@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # 1. BASE DE DATOS (Local)
   db:
@@ -20,7 +18,7 @@ services:
       dockerfile: Dockerfile
     container_name: galaxy_api
     ports:
-      - "5000:5000" # En tu navegador: localhost:5000
+      - "5000:10000"
     volumes:
       # (Opcional) Para desarrollo: ver cambios en el código sin reconstruir
       - .:/app
@@ -49,6 +47,6 @@ services:
     environment:
       # OJO: Streamlit (dentro de docker) llama a la API por su nombre de servicio 'api',
       # cambiar luego a algo parecido a https://galaxy-api.onrender.com/predict
-      API_URL: http://api:5000/predict
+      API_URL: http://api:10000
     depends_on:
       - api

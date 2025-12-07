@@ -1,73 +1,78 @@
 import os
-import pickle
-import numpy as np
-import datetime
 import io
+import numpy as np
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from flask_cors import CORS  # <--- Para que el Frontend no falle
+from flask_cors import CORS
 from PIL import Image
-from huggingface_hub import hf_hub_download
 from dotenv import load_dotenv
-from src.database.db import db          # <--- IMPORTAMOS EL CONECTOR
-from src.database.models import Prediction # <--- IMPORTAMOS EL MODELO
+
+# --- IMPORTS DEL MODELO DE "GALAXIAS" (TENSORFLOW) ---
+from tensorflow.keras.models import load_model
+from huggingface_hub import hf_hub_download
+
+# --- IMPORTS ---
+from src.database.db import db
+from src.database.models import Prediction
+import datetime
 
 # Cargar variables de entorno (.env) automáticamente si estamos en local sin Docker
 load_dotenv()
 
 app = Flask(__name__)
 
-# --- 1. CONFIGURACIÓN CORS (CRUCIAL PARA EQUIPOS) ---
-# Permite que cualquier origen (*) acceda a tu API. 
-# En prod real podrías restringirlo al dominio de tu frontend.
+# 1. CONFIGURACIÓN CORS
+# Permite que cualquier origen acceda a tu API. 
 CORS(app)
 
-# --- 2. CONFIGURACIÓN ROBUSTA DE BBDD (POSTGRES ONLY) ---
-# Intentamos leer la URL. Si no existe, fallamos (Fail Fast).
-# Esto evita que creas que estás guardando datos y en realidad no esté conectado.
+# 2. CONFIGURACIÓN DE BASE DE DATOS
 database_url = os.getenv('DATABASE_URL')
 
 if not database_url:
-    raise ValueError("❌ ERROR CRÍTICO: No se encontró la variable DATABASE_URL. "
+    raise ValueError("❌ ERROR: No se encontró la variable DATABASE_URL. "
                      "Asegúrate de ejecutar con 'docker-compose up' o configurar tu .env")
 
-# Parche necesario para Render (postgres:// -> postgresql://)
+# Parche para Render (postgres:// -> postgresql://)
 if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 
 app.config['SQLALCHEMY_DATABASE_URI'] = database_url
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'clave_segura_por_defecto')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'super-secret-key')
 
-# INICIALIZACIÓN DE LA BASE DE DATOS
-# Vinculamos la base de datos a esta app específica
+# Inicializamos la DB con la app
 db.init_app(app)
 
-# --- 3. CARGA DEL MODELO (HUGGING FACE) ---
-REPO_ID = "rocio2125/paisajes"
-FILENAME = "paisajes.pkl"
+# 3. CARGA DEL MODELO DE GALAXIAS (TENSORFLOW + HUGGING FACE)
+# Usamos el repo pero con caché persistente
+REPO_ID = "jprizzi/galaxy-classifier" # Poner el repo en HF
+FILENAME = "modelo_galaxias.keras" # Asegúrate que este sea el nombre exacto en HF
+CACHE_DIR = "/app/model_cache"     # Coincide con docker-compose.yml
 
-def load_model_from_hf():
-    print("⬇️ Iniciando descarga del modelo desde HuggingFace...")
-    try:
-        # cache_dir="/app/model_cache" optimiza la descarga en Docker
-        model_path = hf_hub_download(
-            repo_id=REPO_ID,
-            filename=FILENAME,
-            cache_dir="/app/model_cache"
-        )
-        with open(model_path, "rb") as f:
-            model = pickle.load(f)
-        print("✅ Modelo cargado correctamente en memoria.")
-        return model
-    except Exception as e:
-        print(f"❌ ERROR FATAL cargando el modelo: {e}")
-        return None
+print("⏳ Iniciando carga del modelo de Galaxias...")
 
-# Cargamos el modelo al iniciar la app (Variables globales)
-model = load_model_from_hf()
+try:
+    model_path = hf_hub_download(
+        repo_id=REPO_ID,
+        filename=FILENAME,
+        cache_dir=CACHE_DIR
+    )
+    print(f"✅ Modelo descargado/encontrado en: {model_path}")
 
-# --- 4. CREACIÓN DE TABLAS (SEGURO PARA PROD) ---
+    # Cargamos el modelo de Keras
+    model = load_model(model_path)
+    print("🚀 Modelo de Galaxias cargado en memoria!")
+except Exception as e:
+    print(f"❌ ERROR CRÍTICO cargando el modelo: {e}")
+    model = None
+
+# Etiquetas del modelo de Galaxias (Mapeo de índice a nombre)
+LABELS = {
+    0: "spiral", 1: "elliptical", 2: "lenticular", 3: "irregular",
+    4: "merger", 5: "unknown", 6: "barred spiral", 7: "compact",
+    8: "edge_on", 9: "other"
+}
+
+# 4. CREACIÓN DE TABLAS
 # Al arrancar, verificamos que la conexión a Postgres funciona y creamos tablas
 with app.app_context():
     try:
@@ -76,112 +81,145 @@ with app.app_context():
     except Exception as e:
         print(f"❌ Error conectando a la Base de Datos: {e}")
 
-# --- 5. PREPROCESADO ---
+
+# 5. ENDPOINTS
+
+# ENDPOINT: BIENVENIDA
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({"message": "API de Predicción de Galaxias Activa v1.0"}), 200
+
+# ENDPOINT: ESTADO DE LA API
+@app.route("/health", methods=["GET"])
+def health_check():
+    return jsonify({"status": "ok", "model": "galaxy-classifier-v1"}), 200
+
+
+# PREPROCESADO
 def preprocess_image(image_bytes):
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img = img.resize((100, 100)) # ¡OJO! Ajustad esto al tamaño real que pida vuestro modelo
-        img_arr = np.array(img) / 255.0
-        img_arr = np.expand_dims(img_arr, axis=0)
-        return img_arr
+        img = img.resize((224, 224))
+        arr = np.array(img) / 255.0
+
+        # LOG DE DIAGNÓSTICO
+        print(f"🔍 [DEBUG IMG] Shape: {arr.shape} | Min: {arr.min():.4f} | Max: {arr.max():.4f}")
+
+        return np.expand_dims(arr, axis=0)
     except Exception as e:
-        raise ValueError(f"Imagen corrupta o formato inválido: {e}")
+        # Si la imagen está corrupta, lanzamos error para capturarlo después
+        raise ValueError(f"Error procesando imagen: {e}")
 
-# --- 6. ENDPOINTS ---
-
-# Endpoint de bienvenida
-@app.route("/", methods=["GET"])
-def home():
-    return jsonify({"message": "API de Predicción de Paisajes Activa v1.0"}), 200
-
-# Endpoint de estado de la API
-@app.route("/health", methods=["GET"])
-def health_check():
-    """Endpoint para que Render sepa que estamos vivos"""
-    return jsonify({"status": "ok", "db": "connected"}), 200
-
-# Endpoint de predicción
+# ENDPOINT: PREDICT
 @app.route("/predict", methods=["POST"])
 def predict():
+    # 1. Seguridad: Verificar que el modelo existe
     if model is None:
-        return jsonify({"error": "El modelo de IA no está disponible"}), 500
+        return jsonify({"error": "El modelo no está disponible"}), 500
 
-    # Soporte para enviar la imagen como 'image' o 'file'
-    if 'image' in request.files:
-        image_file = request.files['image']
-    elif 'file' in request.files:
-        image_file = request.files['file']
-    else:
-        return jsonify({"error": "Falta el archivo. Usa la key 'image' o 'file'"}), 400
+    # 2. Flexibilidad: Aceptar 'image' O 'file'
+    if 'image' not in request.files and 'file' not in request.files:
+        return jsonify({"error": "Debes subir una imagen (key 'image' o 'file')"}), 400
+    
+    file = request.files.get("image") or request.files.get("file")
 
+    # --- Imprimir qué llega ---
+    print(f"📸 API Recibió archivo: {file.filename}")
+    
     try:
-        image_bytes = image_file.read()
-        processed_img = preprocess_image(image_bytes)
+        # 3. Procesamiento
+        img_bytes = file.read()
+        img_processed = preprocess_image(img_bytes)
         
-        # Inferencia
-        prediction_result = model.predict(processed_img)
-        pred_value = prediction_result.tolist()
+        # 4. Inferencia
+        pred = model.predict(img_processed)
 
-        # Guardado en PostgreSQL
-        new_entry = Prediction(
-            timestamp=datetime.datetime.now().isoformat(),
-            filename=image_file.filename,
-            prediction=str(pred_value)
+        # --- Predicción Cruda ---
+        print(f"📊 [DEBUG PRED] Vector crudo: {pred}")
+
+        class_index = int(np.argmax(pred))
+        class_name = LABELS.get(class_index, "Unknown")
+        confidence = float(np.max(pred)) # <--- Extraemos la confianza
+
+        # 5. Guardado Seguro en BD
+        new_prediction = Prediction(
+            filename=file.filename,
+            prediction=class_name,
+            confidence=confidence
         )
-        db.session.add(new_entry)
+        db.session.add(new_prediction)
         db.session.commit()
+
+        # Al final de la función, cuando guardas:
+        print(f"🧠 Predicción: {class_name} | Confianza: {confidence}")
 
         return jsonify({
-            "filename": image_file.filename,
-            "prediction": pred_value,
-            "saved_to_db": True
+            "id": new_prediction.id,
+            "timestamp": new_prediction.timestamp.isoformat(), # Asumiendo que tu modelo lo genera
+            "filename": file.filename,
+            "prediction_name": class_name,
+            "confidence": confidence
         })
 
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400 # Error de usuario (imagen mala)
     except Exception as e:
-        db.session.rollback() # Deshacer cambios si falla
-        return jsonify({"error": str(e)}), 500
+        db.session.rollback() # <--- ¡IMPORTANTE! Limpiamos la transacción fallida
+        return jsonify({"error": f"Error interno: {str(e)}"}), 500
 
-# Endpoint de consultar predicciones
+# ENDPOINT: TODAS LAS PREDICCIONES
+
 @app.route("/predictions", methods=["GET"])
 def get_predictions():
-    try:
-        # Ordenamos por ID descendente (lo más nuevo primero)
-        all_preds = Prediction.query.order_by(Prediction.id.desc()).all()
-        results = [{
+    preds = Prediction.query.order_by(Prediction.id).all()
+    return jsonify([
+        {
             "id": p.id,
-            "timestamp": p.timestamp,
+            "timestamp": p.timestamp.isoformat(),
             "filename": p.filename,
-            "prediction": p.prediction
-        } for p in all_preds]
-        return jsonify(results)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+            "prediction": p.prediction,
+            "confidence": p.confidence
+        }
+        for p in preds
+    ])
 
-# Endpoint de consultar predicción por ID
-@app.route("/predictions/<int:prediction_id>", methods=["GET"])
-def get_prediction_by_id(prediction_id):
-    p = Prediction.query.get(prediction_id)
-    if p is None:
-        return jsonify({"error": "Predicción no encontrada"}), 404
-    
+# ENDPOINT: PREDICCIÓN POR ID
+
+@app.route("/predictions/<int:pred_id>", methods=["GET"])
+def get_prediction_by_id(pred_id):
+    p = Prediction.query.get(pred_id)
+    if not p:
+        return jsonify({"error": "ID no encontrado"}), 404
+
     return jsonify({
         "id": p.id,
-        "timestamp": p.timestamp,
+        "timestamp": p.timestamp.isoformat(),
         "filename": p.filename,
-        "prediction": p.prediction
+        "prediction": p.prediction,
+        "confidence": p.confidence
     })
 
-# Endpoint de borrar predicciones
+
+# ENDPOINT: BORRAR TABLA
+
 @app.route("/predictions/delete", methods=["DELETE"])
-def delete_all_predictions():
+def delete_all():
+    db.session.query(Prediction).delete()
+    db.session.commit()
+    return jsonify({"message": "Todas las predicciones eliminadas"}), 200
+
+# ENDPOINT: RESETEAR BASE DE DATOS
+
+@app.route("/reset_db", methods=["POST"])
+def reset_db():
     try:
-        # Borrado masivo rápido
-        db.session.query(Prediction).delete()
-        db.session.commit()
-        return jsonify({"message": "Historial completo eliminado"}), 200
+        db.drop_all()
+        db.create_all()
+        return jsonify({"status": "ok", "message": "Database reset done"}), 200
     except Exception as e:
-        db.session.rollback()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000)

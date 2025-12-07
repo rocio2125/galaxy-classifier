@@ -6,7 +6,7 @@ numpy
 pillow
 huggingface_hub
 python-dotenv
-scikit-learn
-tensorflow
+tensorflow-cpu
 streamlit
 requests
+flask-cors
