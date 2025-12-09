@@ -227,7 +227,7 @@ def delete_all():
 
 # ENDPOINT: RESETEAR BASE DE DATOS
 
-@app.route("/predictions/delete", methods=["DELETE"])
+@app.route("/predictions/reset", methods=["DELETE"])
 def delete_all_predictions():
     from sqlalchemy import text
     db.session.execute(text("TRUNCATE TABLE predictions RESTART IDENTITY CASCADE;"))
