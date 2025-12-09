@@ -140,7 +140,7 @@ def predict():
         
         class_index = int(np.argmax(pred))
         class_name = LABELS.get(class_index, "Unknown")
-        confidence = float(np.max(pred))
+        confidence = float(np.max(pred)).round(2) # redondear a 2 decimales
 
         # Guardar
         new_prediction = Prediction(
@@ -198,25 +198,25 @@ def get_prediction_by_id(pred_id):
 
 # ENDPOINT: PREDICCIÓN POR FILENAME
 
-@app.route("/predictions/filename", methods=["GET"])
-def get_by_filename():
-    filename = request.args.get("filename", "").strip()
-
-    if not filename:
-        return jsonify({"error": "filename requerido"}), 400
-
-    # Case-insensitive + parcial:
-    results = (
-        Prediction.query
-        .filter(Prediction.filename.ilike(f"%{filename}%"))
-        .all()
-    )
-
-    if not results:
-        return jsonify({"error": "Archivo no encontrado"}), 404
-
-    return jsonify([r.to_dict() for r in results]), 200
-
+# @app.route("/predictions/filename", methods=["GET"])
+# def get_by_filename():
+    # filename = request.args.get("filename", "").strip()
+# 
+    # if not filename:
+        # return jsonify({"error": "filename requerido"}), 400
+# 
+    ##Case-insensitive + parcial:
+    # results = (
+        # Prediction.query
+        # .filter(Prediction.filename.ilike(f"%{filename}%"))
+        # .all()
+    # )
+# 
+    # if not results:
+        # return jsonify({"error": "Archivo no encontrado"}), 404
+# 
+    # return jsonify([r.to_dict() for r in results]), 200
+# 
 # ENDPOINT: BORRAR TABLA
 
 @app.route("/predictions/delete", methods=["DELETE"])
@@ -227,7 +227,7 @@ def delete_all():
 
 # ENDPOINT: RESETEAR BASE DE DATOS
 
-@app.route("/predictions/delete", methods=["DELETE"])
+@app.route("/predictions/reset", methods=["DELETE"])
 def delete_all_predictions():
     from sqlalchemy import text
     db.session.execute(text("TRUNCATE TABLE predictions RESTART IDENTITY CASCADE;"))
